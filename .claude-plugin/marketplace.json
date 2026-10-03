@@ -1,0 +1,14 @@
+{
+  "name": "claude-code-todo-list",
+  "owner": {
+    "name": "mikcop"
+  },
+  "plugins": [
+    {
+      "name": "todo-list",
+      "source": "./",
+      "description": "A Todoist-style task manager for Claude Code: a pane, a /todo command and tools Claude can call"
+    }
+  ],
+  "description": "Claude Code mods by mikcop"
+}

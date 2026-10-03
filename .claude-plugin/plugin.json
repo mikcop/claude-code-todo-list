@@ -1,0 +1,11 @@
+{
+  "name": "todo-list",
+  "version": "0.1.0",
+  "description": "A Todoist-style task manager for Claude Code: a pane, a /todo command and tools Claude can call",
+  "author": { "name": "mikcop", "url": "https://github.com/mikcop" },
+  "homepage": "https://github.com/mikcop/claude-code-todo-list",
+  "repository": "https://github.com/mikcop/claude-code-todo-list",
+  "license": "MIT",
+  "keywords": ["todo", "tasks", "pane", "mod"],
+  "types": "./types/index.d.ts"
+}
