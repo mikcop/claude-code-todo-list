@@ -3,11 +3,29 @@ import { test, expect, mock } from 'claude-code/testing'
 // Sat 3 Oct 2026, 10:00
 const NOW = new Date(2026, 9, 3, 10).getTime()
 
+const LIST = '/home/me/.claude/todo-list.json'
+
+// an in-memory file system and HOME, so a test never touches the real shared list
+const memFs = (on: any, files: Record<string, string> = {}) => {
+  mock.env(on, { HOME: '/home/me' })
+  on('fs.read' as any, async (_$: any, e: any) => {
+    if (!(e.path in files)) throw new Error(`ENOENT: ${e.path}`)
+    return { value: files[e.path] }
+  })
+  on('fs.write' as any, async (_$: any, e: any) => {
+    files[e.path] = e.text
+    return { value: undefined }
+  })
+  on('fs.exists' as any, async (_$: any, e: any) => ({ value: e.path in files }))
+  return files
+}
+
 const cmd = ($: any) => async (args: string) =>
   (await $.command.run({ command: 'todo', args } as any))?.text as string
 
 test('quick add parses date, time, priority, project and labels', async ($, on) => {
   mock.store(on)
+  memFs(on)
   mock.clock(on, { now: NOW })
   const run = cmd($)
 
@@ -24,6 +42,7 @@ test('quick add parses date, time, priority, project and labels', async ($, on) 
 
 test('completing a recurring task moves its date, others close', async ($, on) => {
   mock.store(on)
+  memFs(on)
   mock.clock(on, { now: NOW })
   const run = cmd($)
 
@@ -37,6 +56,7 @@ test('completing a recurring task moves its date, others close', async ($, on) =
 
 test('edit rewrites a task from a quick-add line', async ($, on) => {
   mock.store(on)
+  memFs(on)
   mock.clock(on, { now: NOW })
   const run = cmd($)
 
@@ -50,6 +70,7 @@ test('edit rewrites a task from a quick-add line', async ($, on) => {
 
 test('a known verb with bad arguments gives usage and adds nothing', async ($, on) => {
   mock.store(on)
+  memFs(on)
   mock.clock(on, { now: NOW })
   const run = cmd($)
 
@@ -62,6 +83,7 @@ test('a known verb with bad arguments gives usage and adds nothing', async ($, o
 
 test('run here hands the task to this session as a prompt', async ($, on) => {
   mock.store(on)
+  memFs(on)
   mock.clock(on, { now: NOW })
   const sent: string[] = []
   on('prompt.submit' as any, async (_$: any, e: any) => {
@@ -89,14 +111,10 @@ test('run here hands the task to this session as a prompt', async ($, on) => {
 
 test('new session opens Terminal with the task prompt in a temp file', async ($, on) => {
   mock.store(on)
+  const wrote = memFs(on)
   mock.clock(on, { now: NOW })
-  const wrote: Record<string, string> = {}
   const ran: string[][] = []
   on('session.cwd' as any, async () => ({ value: "/Users/me/it's here" }))
-  on('fs.write' as any, async (_$: any, e: any) => {
-    wrote[e.path] = e.text
-    return { value: undefined }
-  })
   on('process.run' as any, async (_$: any, e: any) => {
     ran.push(e.argv)
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
@@ -113,7 +131,7 @@ test('new session opens Terminal with the task prompt in a temp file', async ($,
   await ui.press({ key: 'view-p:Work' })
   await ui.press({ key: 'sel-1' })
   await ui.press({ key: 'new-1' })
-  const files = Object.keys(wrote)
+  const files = Object.keys(wrote).filter(f => f !== LIST)
   expect(files.length).toBe(1)
   expect(wrote[files[0] as string]).toContain('Scrivere la bozza "v2"')
   expect(wrote[files[0] as string]).not.toContain('todo_complete')
@@ -128,6 +146,7 @@ test('new session opens Terminal with the task prompt in a temp file', async ($,
 
 test('move reorders tasks inside a project', async ($, on) => {
   mock.store(on)
+  memFs(on)
   mock.clock(on, { now: NOW })
   const run = cmd($)
 
@@ -145,6 +164,7 @@ test('move reorders tasks inside a project', async ($, on) => {
 
 test('a reminder fires at the task minute', async ($, on) => {
   mock.store(on)
+  memFs(on)
   const clock = mock.clock(on, { now: NOW })
   const toasts: string[] = []
   on('ui.toast' as any, async (_$: any, e: any) => {
@@ -165,6 +185,7 @@ test('a reminder fires at the task minute', async ($, on) => {
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`pane on ${surface}: add, project, select, edit, complete, delete`, async ($, on) => {
     mock.store(on)
+  memFs(on)
     mock.clock(on, { now: NOW })
     const ui = await $.ui.mount({
       plugin: 'todo-list',
@@ -201,6 +222,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
 test('an overdue recurring task skips the dates it missed; months keep their last day', async ($, on) => {
   mock.store(on)
+  memFs(on)
   mock.clock(on, { now: NOW })
   const run = cmd($)
 
@@ -212,6 +234,7 @@ test('an overdue recurring task skips the dates it missed; months keep their las
 
 test('dates that do not exist stay in the text', async ($, on) => {
   mock.store(on)
+  memFs(on)
   mock.clock(on, { now: NOW })
   const run = cmd($)
 
@@ -222,6 +245,7 @@ test('dates that do not exist stay in the text', async ($, on) => {
 
 test('project names match case-insensitively; subtasks follow their task', async ($, on) => {
   mock.store(on)
+  memFs(on)
   mock.clock(on, { now: NOW })
   const run = cmd($)
 
@@ -247,25 +271,68 @@ test('project names match case-insensitively; subtasks follow their task', async
 })
 
 test('changes another session saved are kept', async ($, on) => {
-  // a store this test can write to, as another session would
-  const kept: Record<string, unknown> = {}
-  on('store.get' as any, async (_$: any, e: any) => ({ value: kept[e.key] }))
-  on('store.set' as any, async (_$: any, e: any) => {
-    kept[e.key] = e.value
-    return { value: undefined }
-  })
+  mock.store(on)
+  // the shared file, which this test writes to as another session would
+  const files = memFs(on)
   mock.clock(on, { now: NOW })
   const run = cmd($)
 
   await run('Mine')
-  // another session writes the shared store
+  // another session writes the shared file
   const other = [
     { id: 1, text: 'Mine', isDone: false, priority: 4, project: 'Inbox', labels: [], due: '', time: '', recur: '', parent: 0 },
     { id: 2, text: 'Theirs', isDone: false, priority: 4, project: 'Inbox', labels: [], due: '', time: '', recur: '', parent: 0 },
   ]
-  kept.items = other
+  files[LIST] = JSON.stringify({ items: other, projects: [] })
   await run('Third')
   const out = await run('list')
   expect(out).toContain('2 [ ] p4 Theirs')
   expect(out).toContain('3 [ ] p4 Third')
+})
+
+const startSession = async ($: any, on: any) => {
+  on('session.start' as any, async (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('command.register' as any, async () => ({ value: { command: 'todo' } }))
+  on('tool.register' as any, async () => ({ value: { tool: 'x' } }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+}
+
+test('the list lives in one shared file: changes go there and other sessions\' changes come back', async ($, on) => {
+  mock.store(on)
+  const files = memFs(on)
+  const clock = mock.clock(on, { now: NOW })
+  await startSession($, on)
+  const run = cmd($)
+
+  await run('Buy milk #Home')
+  const saved = JSON.parse(files[LIST] as string)
+  expect(saved.items[0].text).toBe('Buy milk')
+  expect(saved.projects).toEqual(['Home'])
+
+  // another session adds a task to the file
+  saved.items.push({ ...saved.items[0], id: 2, text: 'Call the bank' })
+  files[LIST] = JSON.stringify(saved)
+  expect(await run('list')).toContain('Call the bank')
+
+  // and the pane picks up a change on its own within a few seconds
+  saved.items.push({ ...saved.items[0], id: 3, text: 'Water plants' })
+  files[LIST] = JSON.stringify(saved)
+  await clock.advance(3000)
+  await run('done 3')
+  expect(JSON.parse(files[LIST] as string).items.map((t: any) => t.text)).toEqual(['Buy milk', 'Call the bank', 'Water plants'])
+})
+
+test('the first run carries the old per-plugin store over to the shared file', async ($, on) => {
+  mock.store(on, {
+    items: [{ id: 1, text: 'Old task', isDone: false, priority: 4, project: 'Work', labels: [], due: '', time: '', recur: '', parent: 0 }],
+    projects: ['Work'],
+  })
+  const files = memFs(on)
+  mock.clock(on, { now: NOW })
+  await startSession($, on)
+
+  const saved = JSON.parse(files[LIST] as string)
+  expect(saved.items[0].text).toBe('Old task')
+  expect(saved.projects).toEqual(['Work'])
+  expect(await cmd($)('list')).toContain('Old task')
 })
