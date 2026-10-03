@@ -18,7 +18,8 @@ and are shared by every session on your machine. Nothing is sent anywhere.
     Italian words work too (`oggi`, `domani`, `lun`, `alle 15:00`, `ogni settimana`)
   - times: `at 14:30`, `3pm`
   - recurrence: `every day`, `every week`, `every month`, `every weekday`, `every mon`
-- Recurring tasks move to their next date when completed
+- Recurring tasks move to their next date when completed, skipping dates already past;
+  `every month` on the 31st falls on the last day of shorter months
 - **Edit** a task from the pane (the field is filled with its quick-add line) or with `/todo edit`
 - **Reorder** inside a project with `↑` / `↓` / `top` (a terminal has no real drag and drop)
 - **Reminders:** a toast at the minute a timed task is due (only while Claude Code is open)
@@ -65,8 +66,9 @@ Claude can also call `todo_list`, `todo_add`, `todo_update`, `todo_complete` and
 
 ## Good to know
 
-- Every session reads the list when it starts and rewrites the whole list when it saves.
-  Two sessions editing at the same time can overwrite each other's changes.
+- Every session reads the shared list again before each change and every 20 seconds, so the
+  pane shows what other sessions did and a change here does not undo theirs. Two changes made
+  within the same instant in two sessions can still collide; the later one wins.
 - `⧉ new session` needs macOS and the `claude` command on the `PATH` of Terminal; macOS may ask
   for permission to control Terminal the first time. The new session starts in the current
   session's working directory and does not have this plugin's tools unless the plugin is installed.

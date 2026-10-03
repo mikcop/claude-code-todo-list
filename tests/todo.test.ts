@@ -198,3 +198,74 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.unmount()
   })
 }
+
+test('an overdue recurring task skips the dates it missed; months keep their last day', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: NOW })
+  const run = cmd($)
+
+  await run('Stretch every day 2026-09-28')
+  expect(await run('done 1')).toContain('next: 2026-10-04')
+  await run('Pay card every month 2026-10-31')
+  expect(await run('done 2')).toContain('next: 2026-11-30')
+})
+
+test('dates that do not exist stay in the text', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: NOW })
+  const run = cmd($)
+
+  expect(await run('Odd 31/02')).toContain('Odd 31/02 | #Inbox')
+  expect(await run('Odd 2026-13-45')).toContain('Odd 2026-13-45 | #Inbox')
+  expect(await run('Even 28/02')).toContain('due 2027-02-28')
+})
+
+test('project names match case-insensitively; subtasks follow their task', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: NOW })
+  const run = cmd($)
+
+  await run('project Work')
+  expect(await run('project work')).toContain('Project ready: Work')
+  expect(await run('project inbox')).toContain('Project ready: Inbox')
+  const ui = await $.ui.mount({
+    plugin: 'todo-list',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'todo-list',
+    props: {},
+    viewport: { columns: 80, rows: 24 },
+  } as any)
+  await ui.input({ key: 'new', text: 'Report #Work' })
+  await ui.press({ key: 'view-p:Work' })
+  await ui.press({ key: 'sel-1' })
+  await ui.press({ key: 'sub-1' })
+  await ui.input({ key: 'new', text: 'Outline' })
+  await ui.unmount()
+  await run('edit 1 Report #Home')
+  expect(await run('list Home')).toContain('Outline')
+})
+
+test('changes another session saved are kept', async ($, on) => {
+  // a store this test can write to, as another session would
+  const kept: Record<string, unknown> = {}
+  on('store.get' as any, async (_$: any, e: any) => ({ value: kept[e.key] }))
+  on('store.set' as any, async (_$: any, e: any) => {
+    kept[e.key] = e.value
+    return { value: undefined }
+  })
+  mock.clock(on, { now: NOW })
+  const run = cmd($)
+
+  await run('Mine')
+  // another session writes the shared store
+  const other = [
+    { id: 1, text: 'Mine', isDone: false, priority: 4, project: 'Inbox', labels: [], due: '', time: '', recur: '', parent: 0 },
+    { id: 2, text: 'Theirs', isDone: false, priority: 4, project: 'Inbox', labels: [], due: '', time: '', recur: '', parent: 0 },
+  ]
+  kept.items = other
+  await run('Third')
+  const out = await run('list')
+  expect(out).toContain('2 [ ] p4 Theirs')
+  expect(out).toContain('3 [ ] p4 Third')
+})

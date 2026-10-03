@@ -55,14 +55,36 @@ function nextWeekday(from: string, inclusive: boolean) {
   return s
 }
 
-function nextDue(due: string, recur: string) {
+// a real calendar day: no 31/02, no month 13
+function isDate(s: string) {
+  const [y, m, d] = s.split('-').map(Number)
+  const x = new Date(y as number, (m as number) - 1, d as number, 12)
+  return x.getFullYear() === y && x.getMonth() === (m as number) - 1 && x.getDate() === d
+}
+
+// the same day next month, or its last day when the month is shorter (31 Jan -> 28 Feb)
+function addMonth(s: string) {
+  const d = fromYmd(s)
+  const day = d.getDate()
+  d.setDate(1)
+  d.setMonth(d.getMonth() + 1)
+  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()))
+  return ymd(d)
+}
+
+function nextOnce(due: string, recur: string) {
   if (recur === 'day') return addDays(due, 1)
   if (recur === 'week') return addDays(due, 7)
   if (recur === 'weekday') return nextWeekday(due, false)
   if (recur.startsWith('dow:')) return nextDow(due, Number(recur.slice(4)), false)
-  const d = fromYmd(due)
-  d.setMonth(d.getMonth() + 1)
-  return ymd(d)
+  return addMonth(due)
+}
+
+// the next occurrence after today: an overdue recurring task skips the dates it missed
+function nextDue(due: string, recur: string, today: string) {
+  let s = nextOnce(due, recur)
+  while (s <= today) s = nextOnce(s, recur)
+  return s
 }
 
 function dueDay(due: string, today: string) {
@@ -101,6 +123,17 @@ function toQuick(t: Task) {
 }
 
 // ---------- quick add (pure) ----------
+
+// a day/month date in the line (20/10, 20/10/27) as [ymd], or null when there is none or it is not a real day
+function dayMonth(s: string, today: string): [string] | null {
+  const m = s.match(/\s(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?=\s)/)
+  if (!m) return null
+  const y = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : fromYmd(today).getFullYear()
+  const at = (yy: number) => `${yy}-${pad(Number(m[2]))}-${pad(Number(m[1]))}`
+  let due = at(y)
+  if (!m[3] && due < today) due = at(y + 1)
+  return isDate(due) ? [due] : null
+}
 
 function parseQuick(input: string, today: string) {
   let s = ` ${input} `
@@ -162,17 +195,19 @@ function parseQuick(input: string, today: string) {
   }
   {
     let m: RegExpMatchArray | null
+    let dm: [string] | null
     if (take(/\s(?:today|oggi)(?=\s)/i)) due = today
     else if (take(/\sdopodomani(?=\s)/i)) due = addDays(today, 2)
     else if (take(/\s(?:tomorrow|domani)(?=\s)/i)) due = addDays(today, 1)
     else if (take(/\s(?:next week|prossima settimana)(?=\s)/i)) due = nextDow(today, 1, false)
     else if ((m = take(/\sin\s+(\d+)\s+(days?|giorni|giorno|weeks?|settimane|settimana)(?=\s)/i)))
       due = addDays(today, Number(m[1]) * (/^(w|s)/i.test(m[2] as string) ? 7 : 1))
-    else if ((m = take(/\s(\d{4}-\d{2}-\d{2})(?=\s)/))) due = m[1] as string
-    else if ((m = take(/\s(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?=\s)/))) {
-      const y = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : fromYmd(today).getFullYear()
-      due = `${y}-${pad(Number(m[2]))}-${pad(Number(m[1]))}`
-      if (!m[3] && due < today) due = `${y + 1}-${pad(Number(m[2]))}-${pad(Number(m[1]))}`
+    else if ((m = s.match(/\s(\d{4}-\d{2}-\d{2})(?=\s)/)) && isDate(m[1] as string)) {
+      take(/\s(\d{4}-\d{2}-\d{2})(?=\s)/)
+      due = m[1] as string
+    } else if ((dm = dayMonth(s, today))) {
+      take(/\s(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?=\s)/)
+      due = dm[0]
     } else if ((m = take(new RegExp(`\\s(${DAY})(?=\\s)`, 'i'))))
       due = nextDow(today, DOW[(m[1] as string).slice(0, 3).toLowerCase()] as number, false)
   }
@@ -260,12 +295,30 @@ async function nowCtx($: any): Promise<Ctx> {
   return { today: ymd(d), hm: `${pad(d.getHours())}:${pad(d.getMinutes())}` }
 }
 
+async function showStatus($: any, list: Task[]) {
+  const c = await nowCtx($)
+  const n = list.filter(t => !t.isDone && t.due !== '' && t.due <= c.today).length
+  $.ui.status(n === 0 ? undefined : `todo ${n} today`)
+}
+
+// takes in what other sessions saved since this one last looked, so a change here does not undo theirs
+async function sync($: any) {
+  const stored = await $.store.get('items')
+  if (Array.isArray(stored)) {
+    const next = stored.map(norm)
+    if (JSON.stringify(next) !== JSON.stringify(await read($, items))) await update($, items, () => next)
+  }
+  const storedProjects = await $.store.get('projects')
+  if (Array.isArray(storedProjects)) {
+    const next = storedProjects.map(String)
+    if (JSON.stringify(next) !== JSON.stringify(await read($, projects))) await update($, projects, () => next)
+  }
+}
+
 async function save($: any, next: Task[]) {
   await update($, items, () => next)
   await $.store.set('items', next)
-  const c = await nowCtx($)
-  const n = next.filter(t => !t.isDone && t.due !== '' && t.due <= c.today).length
-  $.ui.status(n === 0 ? undefined : `todo ${n} today`)
+  await showStatus($, next)
 }
 
 async function saveProjects($: any, next: string[]) {
@@ -278,6 +331,7 @@ async function addTask(
   input: string,
   ctx: { project?: string; due?: string; parent?: number },
 ): Promise<Task | null> {
+  await sync($)
   const today = await todayStr($)
   const p = parseQuick(input, today)
   if (!p.text) return null
@@ -320,11 +374,12 @@ async function addFromPane($: any, input: string) {
 }
 
 async function completeTask($: any, id: number): Promise<string> {
+  await sync($)
   const list = await read($, items)
   const t = list.find((x: Task) => x.id === id)
   if (!t) return `No task ${id}`
   if (!t.isDone && t.recur && t.due) {
-    const due = nextDue(t.due, t.recur)
+    const due = nextDue(t.due, t.recur, await todayStr($))
     await save($, list.map((x: Task) => (x.id === id ? { ...x, due } : x)))
     return `Done: ${t.text} (next: ${due})`
   }
@@ -334,16 +389,20 @@ async function completeTask($: any, id: number): Promise<string> {
 }
 
 async function deleteTask($: any, id: number): Promise<string> {
+  await sync($)
   const list = await read($, items)
   const t = list.find((x: Task) => x.id === id)
   if (!t) return `No task ${id}`
   const gone = new Set([id, ...descendants(list, id)])
   await update($, selected, (s: number) => (gone.has(s) ? 0 : s))
+  await update($, parent, (s: number) => (gone.has(s) ? 0 : s))
+  if (gone.has(await read($, editing))) await cancelInput($)
   await save($, list.filter((x: Task) => !gone.has(x.id)))
   return `Deleted: ${t.text}`
 }
 
 async function cyclePriority($: any, id: number) {
+  await sync($)
   const list = await read($, items)
   await save(
     $,
@@ -352,6 +411,7 @@ async function cyclePriority($: any, id: number) {
 }
 
 async function deleteProject($: any, name: string) {
+  await sync($)
   const list = await read($, items)
   await save($, list.map((x: Task) => (x.project === name ? { ...x, project: 'Inbox' } : x)))
   await saveProjects($, (await read($, projects)).filter((p: string) => p !== name))
@@ -359,6 +419,7 @@ async function deleteProject($: any, name: string) {
 }
 
 async function listText($: any, which: string) {
+  await sync($)
   const c = await nowCtx($)
   const id = resolveView(which, await read($, projects))
   try {
@@ -370,6 +431,7 @@ async function listText($: any, which: string) {
 }
 
 async function updateTask($: any, id: number, input: string): Promise<string> {
+  await sync($)
   const c = await nowCtx($)
   const p = parseQuick(input, c.today)
   const list = await read($, items)
@@ -384,11 +446,14 @@ async function updateTask($: any, id: number, input: string): Promise<string> {
     if (!known) await saveProjects($, [...projs, project])
   }
   const next: Task = { ...t, text: p.text, priority: p.priority, labels: p.labels, due: p.due, time: p.time, recur: p.recur, project }
-  await save($, list.map((x: Task) => (x.id === id ? next : x)))
+  // subtasks follow their task to its new project
+  const kids = new Set(descendants(list, id))
+  await save($, list.map((x: Task) => (x.id === id ? next : kids.has(x.id) ? { ...x, project } : x)))
   return `Updated: ${line(next)}`
 }
 
 async function moveTask($: any, id: number, dir: string): Promise<string> {
+  await sync($)
   const list = await read($, items)
   const idx = list.findIndex((x: Task) => x.id === id)
   if (idx < 0) return `No task ${id}`
@@ -549,7 +614,12 @@ export const register: Register = on => {
     await saveProjects($, Array.isArray(storedProjects) ? storedProjects : [])
     await $.store.delete('filters')
     await save($, Array.isArray(stored) ? stored.map(norm) : [])
-    $.clock.every(20000, () => remind($))
+    // every 20s: pick up other sessions' changes, keep the status line on today's date, fire reminders
+    $.clock.every(20000, async () => {
+      await sync($)
+      await showStatus($, await read($, items))
+      await remind($)
+    })
 
     return next(e)
   })
@@ -606,11 +676,14 @@ export const register: Register = on => {
     if (verb === 'edit') return { text: await updateTask($, id, rest.slice(1).join(' ')) }
     if (verb === 'move') return { text: await moveTask($, id, rest[1] as string) }
     if (verb === 'project') {
+      await sync($)
       const projs = await read($, projects)
-      if (!projs.includes(arg)) await saveProjects($, [...projs, arg])
-      return { text: `Project ready: ${arg}` }
+      const known = ['Inbox', ...projs].find(x => x.toLowerCase() === arg.toLowerCase())
+      if (!known) await saveProjects($, [...projs, arg])
+      return { text: `Project ready: ${known ?? arg}` }
     }
     if (verb === 'clear') {
+      await sync($)
       const list = await read($, items)
       await save($, list.filter((t: Task) => !t.isDone))
       return { text: 'Cleared completed tasks.' }
