@@ -301,29 +301,56 @@ async function showStatus($: any, list: Task[]) {
   $.ui.status(n === 0 ? undefined : `todo ${n} today`)
 }
 
+// The list lives in one file every session reads and writes: the plugin's own
+// $.store is kept per load source, so two sessions could each see a different list.
+let lastText = ''
+
+async function sharedPath($: any) {
+  return `${(await $.env.get('HOME')) ?? ''}/.claude/todo-list.json`
+}
+
+async function persist($: any) {
+  const text = JSON.stringify({ items: await read($, items), projects: await read($, projects) }, null, 2)
+  if (text === lastText) return
+  lastText = text
+  await $.fs.write(await sharedPath($), text)
+}
+
 // takes in what other sessions saved since this one last looked, so a change here does not undo theirs
 async function sync($: any) {
-  const stored = await $.store.get('items')
-  if (Array.isArray(stored)) {
-    const next = stored.map(norm)
+  let text: string
+  try {
+    text = (await $.fs.read(await sharedPath($))) as string
+  } catch {
+    return
+  }
+  if (text === lastText) return
+  let data: any
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return
+  }
+  lastText = text
+  if (Array.isArray(data.items)) {
+    const next = data.items.map(norm)
     if (JSON.stringify(next) !== JSON.stringify(await read($, items))) await update($, items, () => next)
   }
-  const storedProjects = await $.store.get('projects')
-  if (Array.isArray(storedProjects)) {
-    const next = storedProjects.map(String)
+  if (Array.isArray(data.projects)) {
+    const next = data.projects.map(String)
     if (JSON.stringify(next) !== JSON.stringify(await read($, projects))) await update($, projects, () => next)
   }
 }
 
 async function save($: any, next: Task[]) {
   await update($, items, () => next)
-  await $.store.set('items', next)
+  await persist($)
   await showStatus($, next)
 }
 
 async function saveProjects($: any, next: string[]) {
   await update($, projects, () => next)
-  await $.store.set('projects', next)
+  await persist($)
 }
 
 async function addTask(
@@ -609,14 +636,20 @@ export const register: Register = on => {
       inputSchema: { type: 'object', properties: { id: { type: 'number' } }, required: ['id'] },
     })
 
-    const stored = (await $.store.get('items')) as unknown[] | undefined
-    const storedProjects = (await $.store.get('projects')) as string[] | undefined
-    await saveProjects($, Array.isArray(storedProjects) ? storedProjects : [])
-    await $.store.delete('filters')
-    await save($, Array.isArray(stored) ? stored.map(norm) : [])
-    // every 20s: pick up other sessions' changes, keep the status line on today's date, fire reminders
-    $.clock.every(20000, async () => {
+    if (await $.fs.exists(await sharedPath($))) {
       await sync($)
+      await showStatus($, await read($, items))
+    } else {
+      // first run with the shared file: carry over the list this load source kept in $.store
+      const stored = (await $.store.get('items')) as unknown[] | undefined
+      const storedProjects = (await $.store.get('projects')) as string[] | undefined
+      await saveProjects($, Array.isArray(storedProjects) ? storedProjects.map(String) : [])
+      await save($, Array.isArray(stored) ? stored.map(norm) : [])
+    }
+    await $.store.delete('filters')
+    // every 3s: pick up other sessions' changes; every 20s: keep the status line on today's date, fire reminders
+    $.clock.every(3000, () => sync($))
+    $.clock.every(20000, async () => {
       await showStatus($, await read($, items))
       await remind($)
     })

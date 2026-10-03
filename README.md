@@ -4,8 +4,9 @@ A Todoist-style task manager that lives inside [Claude Code](https://claude.com/
 a side pane, a `/todo` slash command, and tools Claude itself can call, so you can say
 "add a task to call Marco tomorrow at 3pm" in plain language.
 
-Tasks are stored locally in the plugin's own store (a JSON file under `~/.claude/plugins/store/`)
-and are shared by every session on your machine. Nothing is sent anywhere.
+Tasks are stored locally in one file, `~/.claude/todo-list.json`, shared by every session on your
+machine, however the plugin was loaded. Nothing is sent anywhere. On its first run the plugin
+carries over a list kept by an older version in `~/.claude/plugins/store/`.
 
 > Not affiliated with or endorsed by Todoist / Doist. Built and tested with Claude Code 2.1.288.
 
@@ -66,7 +67,7 @@ Claude can also call `todo_list`, `todo_add`, `todo_update`, `todo_complete` and
 
 ## Good to know
 
-- Every session reads the shared list again before each change and every 20 seconds, so the
+- Every session reads the shared list again before each change and every 3 seconds, so the
   pane shows what other sessions did and a change here does not undo theirs. Two changes made
   within the same instant in two sessions can still collide; the later one wins.
 - `⧉ new session` needs macOS and the `claude` command on the `PATH` of Terminal; macOS may ask
